@@ -6,9 +6,9 @@ from population_sim.simulation import PopulationSimulation
 def main():
     random.seed(42)
 
-    initial_women = 150
+    initial_women = 100
     initial_men = 100
-    years = 100
+    years = 50
 
     simulation = PopulationSimulation(
         initial_women=initial_women,

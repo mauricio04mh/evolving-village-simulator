@@ -6,13 +6,14 @@ def event_occurs(probability: float) -> bool:
     return random.random() < probability
 
 
-def annual_probability_to_rate(probability: float) -> float:
+def interval_probability_to_rate(probability: float, interval_length: float) -> float:
     """
-    Converts an annual probability into a continuous-time event rate.
+    Converts a probability associated with a complete interval into
+    a continuous-time event rate.
 
-    If P(event during one year) = p, then:
+    If P(event during interval of length L) = p, then:
 
-        rate = -ln(1 - p)
+        rate = -ln(1 - p) / L
 
     This rate can be used with an exponential distribution.
     """
@@ -22,7 +23,20 @@ def annual_probability_to_rate(probability: float) -> float:
     if probability >= 1:
         return float("inf")
 
-    return -math.log(1 - probability)
+    if interval_length <= 0:
+        return 0.0
+
+    return -math.log(1 - probability) / interval_length
+
+
+def annual_probability_to_rate(probability: float) -> float:
+    """
+    Converts an annual probability into a continuous-time yearly rate.
+
+    This is still useful for events that are explicitly assumed to be annual,
+    such as relationship breakups.
+    """
+    return interval_probability_to_rate(probability, 1.0)
 
 
 def weighted_choice(options, weights):

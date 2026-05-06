@@ -24,14 +24,15 @@ from population_sim.event_calendar import EventCalendar
 from population_sim.person import Person
 from population_sim.random_utils import (
     annual_probability_to_rate,
+    interval_probability_to_rate,
     event_occurs,
 )
 from population_sim.rules import (
     generate_desired_children,
     generate_number_of_babies,
-    get_annual_death_probability,
-    get_annual_partner_desire_probability,
-    get_annual_pregnancy_probability,
+    get_death_interval_info,
+    get_partner_desire_interval_info,
+    get_pregnancy_interval_info,
     get_loneliness_mean_years,
     get_next_death_age_boundary,
     get_next_partner_desire_age_boundary,
@@ -163,8 +164,14 @@ class PopulationSimulation:
         token = person.death_token
 
         age = person.age(self.current_time)
-        annual_probability = get_annual_death_probability(age, person.sex)
-        rate = annual_probability_to_rate(annual_probability)
+
+        interval_probability, interval_start, interval_end = get_death_interval_info(
+            age,
+            person.sex,
+        )
+
+        interval_length = interval_end - interval_start
+        rate = interval_probability_to_rate(interval_probability, interval_length)
 
         next_boundary = get_next_death_age_boundary(age)
 
@@ -208,6 +215,7 @@ class PopulationSimulation:
                     "token": token,
                 },
             )
+
 
     def _process_death_event(self, data: dict):
         person = self._get_person_by_id(data["person_id"])
@@ -273,7 +281,6 @@ class PopulationSimulation:
     # -------------------------------------------------
     # Partner events
     # -------------------------------------------------
-
     def _schedule_partner_search_or_eligibility(self, person: Person):
         if not person.alive:
             return
@@ -301,8 +308,12 @@ class PopulationSimulation:
             )
             return
 
-        annual_probability = get_annual_partner_desire_probability(age)
-        rate = annual_probability_to_rate(annual_probability)
+        interval_probability, interval_start, interval_end = (
+            get_partner_desire_interval_info(age)
+        )
+
+        interval_length = interval_end - interval_start
+        rate = interval_probability_to_rate(interval_probability, interval_length)
 
         next_boundary = get_next_partner_desire_age_boundary(age)
 
@@ -428,7 +439,8 @@ class PopulationSimulation:
 
         for candidate in candidates:
             candidate_age = candidate.age(self.current_time)
-            candidate_desire_probability = get_annual_partner_desire_probability(
+
+            candidate_desire_probability, _, _ = get_partner_desire_interval_info(
                 candidate_age
             )
 
@@ -471,7 +483,6 @@ class PopulationSimulation:
     # -------------------------------------------------
     # Breakup and loneliness events
     # -------------------------------------------------
-
     def _schedule_breakup(
         self,
         person_a: Person,
@@ -594,8 +605,12 @@ class PopulationSimulation:
 
         age = woman.age(self.current_time)
 
-        annual_probability = get_annual_pregnancy_probability(age)
-        rate = annual_probability_to_rate(annual_probability)
+        interval_probability, interval_start, interval_end = get_pregnancy_interval_info(
+            age
+        )
+
+        interval_length = interval_end - interval_start
+        rate = interval_probability_to_rate(interval_probability, interval_length)
 
         next_boundary = get_next_pregnancy_age_boundary(age)
 
