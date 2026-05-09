@@ -1,5 +1,6 @@
-def collect_statistics(population, current_time, counters):
-    alive_people = [person for person in population if person.alive]
+def collect_statistics(population, current_time, counters, alive_people=None):
+    if alive_people is None:
+        alive_people = [person for person in population if person.alive]
 
     men = [person for person in alive_people if person.sex == "M"]
     women = [person for person in alive_people if person.sex == "F"]

@@ -1,6 +1,7 @@
 import heapq
 import itertools
 import logging
+import math
 from typing import Optional
 
 from population_sim.event import Event
@@ -14,8 +15,14 @@ class EventCalendar:
         self._logger = logger
 
     def schedule(self, time: float, priority: int, event_type: str, data: dict):
+        if not math.isfinite(time):
+            return
+
         if time > self.end_time:
             self._log_discarded_event(time, priority, event_type, data)
+            return
+
+        if time < 0:
             return
 
         sequence = next(self._sequence_counter)
@@ -38,6 +45,9 @@ class EventCalendar:
         event = heapq.heappop(self._events)
         self._log_event("dequeue", event)
         return event
+
+    def size(self) -> int:
+        return len(self._events)
 
     def _log_event(self, action: str, event: Event):
         if self._logger is None:

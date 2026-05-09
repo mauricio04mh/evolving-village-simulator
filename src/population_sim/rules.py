@@ -1,4 +1,5 @@
 from population_sim.random_utils import weighted_choice
+from population_sim.constants import EPSILON
 
 
 def generate_desired_children() -> int:
@@ -13,7 +14,7 @@ def generate_desired_children() -> int:
 
     return weighted_choice(options, weights)
 
-
+    
 def generate_number_of_babies() -> int:
     """
     The original values are interpreted as relative weights because
@@ -27,7 +28,7 @@ def generate_number_of_babies() -> int:
 
 def get_next_age_boundary(age: float, boundaries: list[float]):
     for boundary in boundaries:
-        if age < boundary:
+        if age < boundary - EPSILON:
             return boundary
 
     return None

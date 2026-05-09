@@ -6,14 +6,18 @@ from population_sim.simulation import PopulationSimulation
 def main():
     random.seed(42)
 
-    initial_women = 100
-    initial_men = 100
-    years = 50
+    initial_women = 500
+    initial_men = 500
+    years = 100
+    show_progress = True
+    progress_interval = 100000
 
     simulation = PopulationSimulation(
         initial_women=initial_women,
         initial_men=initial_men,
         years=years,
+        show_progress=show_progress,
+        progress_interval=progress_interval,
     )
 
     results = simulation.run()
