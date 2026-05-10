@@ -1,4 +1,5 @@
 import random
+from collections import defaultdict
 
 from population_sim.constants import (
     BIRTH,
@@ -41,6 +42,18 @@ BREAKUP_CHECK = "breakup_check"
 
 
 class PopulationSimulation:
+    AUDIT_AGE_INTERVALS = (
+        (0, 12),
+        (12, 45),
+        (45, 76),
+        (76, 125),
+    )
+    AUDIT_BOUNDARY_TO_INTERVAL = {
+        12: (12, 45),
+        45: (45, 76),
+        76: (76, 125),
+    }
+
     def __init__(
         self,
         initial_women: int,
@@ -68,6 +81,14 @@ class PopulationSimulation:
 
         self.next_person_id = 0
         self.next_relationship_id = 0
+        self.death_age_range_audit = defaultdict(
+            lambda: {
+                "people_started_range": 0,
+                "deaths_in_range": 0,
+                "deaths_at_125": 0,
+            }
+        )
+        self.person_started_ranges = defaultdict(set)
 
         self._create_initial_population()
         self._schedule_statistics_events()
@@ -250,13 +271,19 @@ class PopulationSimulation:
     def _create_initial_population(self):
         for _ in range(self.initial_women):
             initial_age = random.uniform(0, 100)
-            self._add_person(sex="F", age=initial_age)
+            person = self._add_person(sex="F", age=initial_age)
+
+            if initial_age <= EPSILON:
+                self._register_started_age_range(person, 0, 12)
 
         for _ in range(self.initial_men):
             initial_age = random.uniform(0, 100)
-            self._add_person(sex="M", age=initial_age)
+            person = self._add_person(sex="M", age=initial_age)
 
-    def _add_person(self, sex: str, age: float):
+            if initial_age <= EPSILON:
+                self._register_started_age_range(person, 0, 12)
+
+    def _add_person(self, sex: str, age: float, started_at_birth: bool = False):
         person = Person(
             id=self.next_person_id,
             sex=sex,
@@ -272,6 +299,9 @@ class PopulationSimulation:
         self._schedule_death_or_death_risk_update(person)
         self._schedule_partner_search_or_eligibility(person)
 
+        if started_at_birth:
+            self._register_started_age_range(person, 0, 12)
+
         return person
 
     def _get_person_by_id(self, person_id: int):
@@ -279,6 +309,102 @@ class PopulationSimulation:
 
     def get_alive_people(self):
         return list(self.alive_people_by_id.values())
+
+    def _register_started_age_range(
+        self,
+        person: Person,
+        interval_start: int,
+        interval_end: int,
+    ):
+        interval = (interval_start, interval_end)
+
+        if interval not in self.AUDIT_AGE_INTERVALS:
+            return
+
+        if interval in self.person_started_ranges[person.id]:
+            return
+
+        self.person_started_ranges[person.id].add(interval)
+        key = (person.sex, interval_start, interval_end)
+        self.death_age_range_audit[key]["people_started_range"] += 1
+
+    def _register_age_boundary_start_if_applicable(self, person: Person):
+        age = person.age(self.current_time)
+
+        for boundary, interval in self.AUDIT_BOUNDARY_TO_INTERVAL.items():
+            if abs(age - boundary) <= EPSILON:
+                self._register_started_age_range(
+                    person,
+                    interval_start=interval[0],
+                    interval_end=interval[1],
+                )
+
+    def _get_audit_interval_for_age(self, age: float):
+        bounded_age = min(max(age, 0.0), MAX_AGE)
+
+        if bounded_age < 12:
+            return 0, 12
+
+        if bounded_age < 45:
+            return 12, 45
+
+        if bounded_age < 76:
+            return 45, 76
+
+        return 76, 125
+
+    def _register_death_in_age_range_if_started(self, person: Person):
+        death_age = person.age(self.current_time)
+        interval = self._get_audit_interval_for_age(death_age)
+
+        if interval not in self.person_started_ranges[person.id]:
+            return
+
+        key = (person.sex, interval[0], interval[1])
+
+        if interval == (76, 125) and death_age >= MAX_AGE - EPSILON:
+            self.death_age_range_audit[key]["deaths_at_125"] += 1
+            return
+
+        self.death_age_range_audit[key]["deaths_in_range"] += 1
+
+    def get_death_age_range_audit_rows(self):
+        rows = []
+
+        for sex in ("F", "M"):
+            for interval_start, interval_end in self.AUDIT_AGE_INTERVALS:
+                key = (sex, interval_start, interval_end)
+                counts = self.death_age_range_audit[key]
+                people_started_range = counts["people_started_range"]
+                deaths_in_range = counts["deaths_in_range"]
+                deaths_at_125 = counts["deaths_at_125"]
+
+                if people_started_range > 0:
+                    death_percentage = (
+                        deaths_in_range / people_started_range
+                    ) * 100.0
+                    death_at_125_percentage = (
+                        deaths_at_125 / people_started_range
+                    ) * 100.0
+                else:
+                    death_percentage = 0.0
+                    death_at_125_percentage = 0.0
+
+                rows.append(
+                    {
+                        "sex": sex,
+                        "age_range": f"{interval_start}-{interval_end}",
+                        "interval_start": interval_start,
+                        "interval_end": interval_end,
+                        "people_started_range": people_started_range,
+                        "deaths_in_range": deaths_in_range,
+                        "death_percentage": death_percentage,
+                        "deaths_at_125": deaths_at_125,
+                        "death_at_125_percentage": death_at_125_percentage,
+                    }
+                )
+
+        return rows
 
     # -------------------------------------------------
     # Death events
@@ -379,6 +505,8 @@ class PopulationSimulation:
         if person.death_token != data["token"]:
             return
 
+        self._register_death_in_age_range_if_started(person)
+
         person.alive = False
         self.alive_people_by_id.pop(person.id, None)
         self.counters.total_deaths += 1
@@ -410,6 +538,7 @@ class PopulationSimulation:
         if person.death_token != data["token"]:
             return
 
+        self._register_age_boundary_start_if_applicable(person)
         self._schedule_death_or_death_risk_update(person)
 
     def _handle_widowhood(self, dead_person: Person):
@@ -1007,7 +1136,7 @@ class PopulationSimulation:
 
         for _ in range(number_of_babies):
             baby_sex = "M" if random.random() < 0.5 else "F"
-            self._add_person(sex=baby_sex, age=0)
+            self._add_person(sex=baby_sex, age=0, started_at_birth=True)
             self.counters.total_births += 1
 
         woman.current_children += number_of_babies
