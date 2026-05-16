@@ -34,7 +34,11 @@ from population_sim.rules import (
     get_loneliness_mean_years,
     get_partner_formation_probability,
 )
-from population_sim.statistics import collect_statistics
+from population_sim.statistics import (
+    StatisticsCollector,
+    collect_statistics,
+    safe_divide,
+)
 
 
 MAX_AGE = 125.0
@@ -75,12 +79,17 @@ class PopulationSimulation:
         self.people_by_id = {}
         self.alive_people_by_id = {}
         self.yearly_statistics = []
+        self.initial_population = initial_women + initial_men
 
         self.calendar = EventCalendar(end_time=self.end_time)
         self.counters = SimulationCounters()
+        self.statistics_collector = StatisticsCollector(
+            initial_population=self.initial_population
+        )
 
         self.next_person_id = 0
         self.next_relationship_id = 0
+        self.relationship_start_times = {}
         self.death_age_range_audit = defaultdict(
             lambda: {
                 "people_started_range": 0,
@@ -89,6 +98,7 @@ class PopulationSimulation:
             }
         )
         self.person_started_ranges = defaultdict(set)
+        self.same_time_progress_warnings = 0
 
         self._create_initial_population()
         self._schedule_statistics_events()
@@ -197,6 +207,8 @@ class PopulationSimulation:
             self.current_time = event.time
             self._process_event(event.event_type, event.data)
             processed_events += 1
+            self.counters.processed_events = processed_events
+            self.counters.max_calendar_size = self.calendar.max_size_observed
 
             if self.show_progress and processed_events % self.progress_interval == 0:
                 print(
@@ -217,6 +229,7 @@ class PopulationSimulation:
                     same_time_progress_count = 0
 
                 if same_time_progress_count >= 2:
+                    self.same_time_progress_warnings += 1
                     print(
                         "[warning] simulation time has not advanced across "
                         "multiple progress intervals. Possible same-time "
@@ -224,6 +237,13 @@ class PopulationSimulation:
                     )
 
                 last_progress_time = self.current_time
+
+        self.counters.processed_events = processed_events
+        self.counters.max_calendar_size = self.calendar.max_size_observed
+        self.counters.final_calendar_size = self.calendar.size()
+        self.counters.same_time_progress_warnings = (
+            self.same_time_progress_warnings
+        )
 
         return self.yearly_statistics
 
@@ -309,6 +329,17 @@ class PopulationSimulation:
 
     def get_alive_people(self):
         return list(self.alive_people_by_id.values())
+
+    def _record_relationship_end(self, relationship_id: int):
+        start_time = self.relationship_start_times.pop(relationship_id, None)
+
+        if start_time is None:
+            return
+
+        # Breakups and widowhoods share the same duration accumulator so the
+        # final summary can describe all completed relationships consistently.
+        duration = max(self.current_time - start_time, 0.0)
+        self.counters.record_relationship_duration(duration)
 
     def _register_started_age_range(
         self,
@@ -506,14 +537,16 @@ class PopulationSimulation:
             return
 
         self._register_death_in_age_range_if_started(person)
+        death_age = person.age(self.current_time)
 
         person.alive = False
         self.alive_people_by_id.pop(person.id, None)
-        self.counters.total_deaths += 1
+        self.counters.record_death(sex=person.sex, age=death_age)
 
         person.partner_search_token += 1
 
         if person.pregnant:
+            self.counters.pregnancies_cancelled_by_maternal_death += 1
             person.pregnant = False
             person.childbirth_time = None
             person.pregnancy_father_id = None
@@ -549,6 +582,10 @@ class PopulationSimulation:
 
         if not partner.alive:
             return
+
+        if dead_person.relationship_id is not None:
+            self.counters.total_widowhoods += 1
+            self._record_relationship_end(dead_person.relationship_id)
 
         partner.partner_id = None
         partner.relationship_id = None
@@ -769,6 +806,7 @@ class PopulationSimulation:
         person_a.partner_search_token += 1
         person_b.partner_search_token += 1
 
+        self.relationship_start_times[relationship_id] = self.current_time
         self.counters.total_couples_created += 1
 
         self._schedule_breakup(person_a, person_b, relationship_id)
@@ -869,6 +907,8 @@ class PopulationSimulation:
         if person_b.relationship_id != relationship_id:
             return
 
+        self._record_relationship_end(relationship_id)
+
         person_a.partner_id = None
         person_b.partner_id = None
 
@@ -909,8 +949,11 @@ class PopulationSimulation:
         person.loneliness_token += 1
         token = person.loneliness_token
 
+        # The duration is sampled here, so this is the only exact moment where
+        # we can register the full loneliness spell even if the person dies later.
         loneliness_duration = max(random.expovariate(1 / mean_years), EPSILON)
         person.loneliness_end_time = self.current_time + loneliness_duration
+        self.counters.record_loneliness_duration(loneliness_duration)
 
         self.calendar.schedule(
             time=person.loneliness_end_time,
@@ -1133,11 +1176,12 @@ class PopulationSimulation:
             return
 
         number_of_babies = generate_number_of_babies()
+        self.counters.record_birth_event(number_of_babies)
 
         for _ in range(number_of_babies):
             baby_sex = "M" if random.random() < 0.5 else "F"
             self._add_person(sex=baby_sex, age=0, started_at_birth=True)
-            self.counters.total_births += 1
+            self.counters.record_birth(baby_sex)
 
         woman.current_children += number_of_babies
 
@@ -1168,7 +1212,7 @@ class PopulationSimulation:
     def _collect_yearly_statistics(self):
         alive_people = self.get_alive_people()
 
-        statistics = collect_statistics(
+        statistics = self.statistics_collector.collect(
             population=self.population,
             current_time=self.current_time,
             counters=self.counters,
@@ -1176,3 +1220,94 @@ class PopulationSimulation:
         )
 
         self.yearly_statistics.append(statistics)
+
+    def _build_current_statistics_row(self):
+        return collect_statistics(
+            population=self.population,
+            current_time=self.current_time,
+            counters=self.counters,
+            alive_people=self.get_alive_people(),
+            previous_total_population=self.statistics_collector.previous_total_population,
+            previous_cumulative_totals=(
+                self.statistics_collector.previous_cumulative_totals
+            ),
+        )
+
+    def get_final_summary(self):
+        if self.yearly_statistics:
+            final_stats = self.yearly_statistics[-1]
+        else:
+            final_stats = self._build_current_statistics_row()
+
+        final_population = int(final_stats["total_population"])
+
+        return {
+            "initial_women": self.initial_women,
+            "initial_men": self.initial_men,
+            "initial_population": self.initial_population,
+            "years": self.years,
+            "final_population": final_population,
+            "final_men": int(final_stats["men"]),
+            "final_women": int(final_stats["women"]),
+            "final_couples": int(final_stats["couples"]),
+            "final_pregnant_women": int(final_stats["pregnant_women"]),
+            "final_average_age": float(final_stats["average_age"]),
+            "total_births": self.counters.total_births,
+            "total_deaths": self.counters.total_deaths,
+            "total_pregnancies": self.counters.total_pregnancies,
+            "total_couples_created": self.counters.total_couples_created,
+            "total_breakups": self.counters.total_breakups,
+            "total_widowhoods": self.counters.total_widowhoods,
+            "total_birth_events": self.counters.total_birth_events,
+            "births_male": self.counters.births_male,
+            "births_female": self.counters.births_female,
+            "pregnancies_cancelled_by_maternal_death": (
+                self.counters.pregnancies_cancelled_by_maternal_death
+            ),
+            "absolute_population_change": final_population - self.initial_population,
+            "relative_population_change": safe_divide(
+                final_population - self.initial_population,
+                self.initial_population,
+            ),
+            "extinction": 1 if final_population == 0 else 0,
+            "survival_population_ratio": safe_divide(
+                final_population,
+                self.initial_population,
+            ),
+            "births_per_initial_person": safe_divide(
+                self.counters.total_births,
+                self.initial_population,
+            ),
+            "deaths_per_initial_person": safe_divide(
+                self.counters.total_deaths,
+                self.initial_population,
+            ),
+            "pregnancies_per_initial_woman": safe_divide(
+                self.counters.total_pregnancies,
+                self.initial_women,
+            ),
+            "births_per_pregnancy": safe_divide(
+                self.counters.total_births,
+                self.counters.total_pregnancies,
+            ),
+            "births_per_birth_event": safe_divide(
+                self.counters.total_births,
+                self.counters.total_birth_events,
+            ),
+            "breakups_per_couple_created": safe_divide(
+                self.counters.total_breakups,
+                self.counters.total_couples_created,
+            ),
+            "final_sex_ratio": float(final_stats["sex_ratio"]),
+            "final_couple_ratio": float(final_stats["couple_ratio"]),
+            "processed_events": self.counters.processed_events,
+            "max_calendar_size": self.counters.max_calendar_size,
+            "final_calendar_size": self.counters.final_calendar_size,
+            "average_relationship_duration": float(
+                final_stats["average_relationship_duration"]
+            ),
+            "average_loneliness_duration": float(
+                final_stats["average_loneliness_duration"]
+            ),
+            "same_time_progress_warnings": self.counters.same_time_progress_warnings,
+        }

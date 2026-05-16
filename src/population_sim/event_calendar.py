@@ -13,6 +13,7 @@ class EventCalendar:
         self._events = []
         self._sequence_counter = itertools.count()
         self._logger = logger
+        self.max_size_observed = 0
 
     def schedule(self, time: float, priority: int, event_type: str, data: dict):
         if not math.isfinite(time):
@@ -36,6 +37,7 @@ class EventCalendar:
         )
 
         heapq.heappush(self._events, event)
+        self.max_size_observed = max(self.max_size_observed, len(self._events))
         self._log_event("enqueue", event)
 
     def has_events(self) -> bool:
