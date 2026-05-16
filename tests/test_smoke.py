@@ -1,6 +1,5 @@
 import csv
 import math
-import random
 import sys
 import tempfile
 import unittest
@@ -14,12 +13,24 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from population_sim.experiments import run_experiments
+from population_sim.random_utils import seed_random_variable_generator
 from population_sim.simulation import PopulationSimulation
 
 
 class PopulationSimulationSmokeTest(unittest.TestCase):
+    def test_random_generation_is_centralized(self):
+        random_utils_path = SRC / "population_sim" / "random_utils.py"
+
+        for path in SRC.rglob("*.py"):
+            if path == random_utils_path:
+                continue
+
+            source = path.read_text(encoding="utf-8")
+            self.assertNotIn("import random", source, str(path))
+            self.assertNotIn("random.", source, str(path))
+
     def test_yearly_statistics_have_expected_length_for_100_years(self):
-        random.seed(123)
+        seed_random_variable_generator(123)
         simulation = PopulationSimulation(
             initial_women=2,
             initial_men=2,
@@ -32,7 +43,7 @@ class PopulationSimulationSmokeTest(unittest.TestCase):
         self.assertEqual(100, len(yearly_statistics))
 
     def test_final_summary_and_csv_outputs(self):
-        random.seed(456)
+        seed_random_variable_generator(456)
         simulation = PopulationSimulation(
             initial_women=3,
             initial_men=3,

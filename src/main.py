@@ -1,10 +1,9 @@
-import random
-
+from population_sim.random_utils import seed_random_variable_generator
 from population_sim.simulation import PopulationSimulation
 
 
 def main():
-    random.seed(42)
+    seed_random_variable_generator(42)
 
     initial_women = 500
     initial_men = 500

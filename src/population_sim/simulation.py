@@ -1,4 +1,3 @@
-import random
 from collections import defaultdict
 
 from population_sim.constants import (
@@ -24,7 +23,13 @@ from population_sim.constants import (
 from population_sim.counters import SimulationCounters
 from population_sim.event_calendar import EventCalendar
 from population_sim.person import Person
-from population_sim.random_utils import event_occurs
+from population_sim.random_utils import (
+    event_occurs,
+    exponential,
+    sample_uniform_delay_until_interval_end,
+    shuffle_in_place,
+    uniform,
+)
 from population_sim.rules import (
     generate_desired_children,
     generate_number_of_babies,
@@ -184,7 +189,11 @@ class PopulationSimulation:
         if remaining_time <= EPSILON:
             return EPSILON
 
-        return random.uniform(EPSILON, remaining_time)
+        return sample_uniform_delay_until_interval_end(
+            current_age=current_age,
+            interval_end=interval_end,
+            epsilon=EPSILON,
+        )
 
     def _clamp_probability(self, probability: float) -> float:
         return max(0.0, min(1.0, probability))
@@ -290,14 +299,14 @@ class PopulationSimulation:
 
     def _create_initial_population(self):
         for _ in range(self.initial_women):
-            initial_age = random.uniform(0, 100)
+            initial_age = uniform(0, 100)
             person = self._add_person(sex="F", age=initial_age)
 
             if initial_age <= EPSILON:
                 self._register_started_age_range(person, 0, 12)
 
         for _ in range(self.initial_men):
-            initial_age = random.uniform(0, 100)
+            initial_age = uniform(0, 100)
             person = self._add_person(sex="M", age=initial_age)
 
             if initial_age <= EPSILON:
@@ -773,7 +782,7 @@ class PopulationSimulation:
 
             candidates.append(candidate)
 
-        random.shuffle(candidates)
+        shuffle_in_place(candidates)
 
         for candidate in candidates:
             candidate_age = candidate.age(self.current_time)
@@ -865,7 +874,7 @@ class PopulationSimulation:
         annual_breakup_probability = 0.20
 
         if event_occurs(annual_breakup_probability):
-            delay = random.uniform(EPSILON, 1.0)
+            delay = uniform(EPSILON, 1.0)
 
             self.calendar.schedule(
                 time=self.current_time + delay,
@@ -951,7 +960,7 @@ class PopulationSimulation:
 
         # The duration is sampled here, so this is the only exact moment where
         # we can register the full loneliness spell even if the person dies later.
-        loneliness_duration = max(random.expovariate(1 / mean_years), EPSILON)
+        loneliness_duration = max(exponential(mean_years), EPSILON)
         person.loneliness_end_time = self.current_time + loneliness_duration
         self.counters.record_loneliness_duration(loneliness_duration)
 
@@ -1179,7 +1188,7 @@ class PopulationSimulation:
         self.counters.record_birth_event(number_of_babies)
 
         for _ in range(number_of_babies):
-            baby_sex = "M" if random.random() < 0.5 else "F"
+            baby_sex = "M" if event_occurs(0.5) else "F"
             self._add_person(sex=baby_sex, age=0, started_at_birth=True)
             self.counters.record_birth(baby_sex)
 

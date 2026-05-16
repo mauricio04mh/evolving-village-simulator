@@ -1,9 +1,9 @@
 import argparse
 import math
-import random
 import statistics
 from collections import defaultdict
 
+from population_sim.random_utils import seed_random_variable_generator
 from population_sim.simulation import PopulationSimulation
 
 BASE_METRICS = [
@@ -102,7 +102,7 @@ def summarize_values(values):
 
 
 def run_single_replication(replication, seed, initial_women, initial_men, years):
-    random.seed(seed)
+    seed_random_variable_generator(seed)
 
     simulation = PopulationSimulation(
         initial_women=initial_women,

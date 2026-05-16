@@ -1,9 +1,9 @@
 import csv
 import math
-import random
 import statistics
 from pathlib import Path
 
+from population_sim.random_utils import seed_random_variable_generator
 from population_sim.simulation import PopulationSimulation
 
 
@@ -167,7 +167,7 @@ def run_experiments(
 
     for run_id in range(runs):
         seed = base_seed + run_id
-        random.seed(seed)
+        seed_random_variable_generator(seed)
 
         simulation = PopulationSimulation(
             initial_women=initial_women,
